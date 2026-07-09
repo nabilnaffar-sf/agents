@@ -203,6 +203,18 @@ export {
   type StageArtifact,
   type FileListResponse,
 } from './dataLibraryTypes';
+export { ScorerRunner } from './scorerRunner';
+export {
+  type StdmStep,
+  type StdmInteraction,
+  type StdmSessionData,
+  type ScorerRunStatus,
+  type ScorerRunOptions,
+  type BulkScoringTriggerResponse,
+  type ScorerRunJobStatus,
+  type ScorerRunResult,
+  type ScorerRunResponse,
+} from './scorerRunner';
 export { ApiCatalog } from './apiCatalog';
 export {
   type McpServerType,
