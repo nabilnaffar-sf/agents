@@ -118,7 +118,8 @@
         "package.json"
       ],
       "output": [
-        "src/agentScorers/scorerSpecSchema.generated.ts"
+        "src/agentScorers/scorerSpecSchema.generated.ts",
+        "src/agentScorers/sessionViewSchema.generated.ts"
       ]
     },
     "format": {

@@ -15,16 +15,20 @@
  */
 
 /**
- * Public entry point for the agent scorer authoring feature. The headline operation — `createScorerDefinition`
- * (generate scorer + prompt-template metadata from a typed `ScorerSpec`) — is defined here, composed from the
- * internal business logic in ./agentScorers (the model/types, validation, and the prompt/XML builders).
+ * Public entry point for the agent scorer feature. The two headline operations — `createScorerDefinition`
+ * (generate scorer + prompt-template metadata from a typed `ScorerSpec`) and `runScorer` (run a scorer
+ * against an STDM session and return its score) — are defined here, composed from the internal business logic
+ * in ./agentScorers (the model/types, validation, prompt/XML builders, and the run-time engines).
  */
 
 import { mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { type Connection } from '@salesforce/core';
 import {
   type ScorerSpec,
   type ScorerCreateResult,
+  type ScorerResult,
+  type SessionView,
 } from './agentScorers/types';
 import { validateScorerSpec } from './agentScorers/validate';
 import { buildDefaultPromptContent } from './agentScorers/promptContent';
@@ -33,6 +37,8 @@ import {
   buildPromptTemplateXml,
   parseScorerXml,
 } from './agentScorers/xml';
+import { normalizeSession } from './agentScorers/session';
+import { getEngine, supportedEngineTypes } from './agentScorers/engines/registry';
 
 // Re-export the scorer feature's public surface so consumers import everything from this one root module.
 export * from './agentScorers/types';
@@ -45,6 +51,8 @@ export {
   parseScorerVersions,
   type ScorerVersionInfo,
 } from './agentScorers/xml';
+export { normalizeSession } from './agentScorers/session';
+export { registerEngine, getEngine, supportedEngineTypes } from './agentScorers/engines/registry';
 
 /** File-name suffix of a scorer definition in project metadata. */
 const SCORER_METADATA_SUFFIX = '.aiAgentScorerDefinition-meta.xml';
@@ -123,7 +131,7 @@ async function findScorerFile(dir: string, fileName: string): Promise<string | u
  *
  * Searches the given directories (a project's package directories) for the scorer's
  * `<apiName>.aiAgentScorerDefinition-meta.xml` file and parses it. This is how a caller turns a bare API name
- * into the `ScorerSpec` needed to run it.
+ * into the `ScorerSpec` that `runScorer` needs.
  *
  * @throws if no matching scorer definition exists under any of the directories.
  */
@@ -147,4 +155,29 @@ export async function loadScorerSpec(options: {
       ', '
     )}. Author it first with \`sf agent scorer generate-metadata-file\`.`
   );
+}
+
+/**
+ * Run a scorer against one STDM session and return its score.
+ *
+ * Takes the typed scorer definition directly, so it does no metadata fetching or XML parsing: the caller
+ * supplies a `ScorerSpec` (authored locally, or retrieved and deserialized) and this dispatches to the engine
+ * registered for the scorer's engineType.
+ *
+ * @param spec       The typed scorer definition. Its engineType selects the engine.
+ * @param session    The STDM session detail view to score.
+ * @param connection Connection to the org the scorer runs against.
+ * @throws if the scorer's engineType has no registered engine (e.g. 'Manual').
+ */
+export function runScorer(spec: ScorerSpec, session: SessionView, connection: Connection): Promise<ScorerResult> {
+  const engine = getEngine(spec.engineType);
+  if (!engine) {
+    throw new Error(
+      `Running scorer '${spec.apiName}' is not available: no engine implemented for engineType '${spec.engineType}'. ` +
+        `Supported: ${supportedEngineTypes().join(', ')}.`
+    );
+  }
+  // Normalize timestamps to the format the platform's Input:Session validation accepts, so real STDM data
+  // (which uses `+00:00` / `Z` / variable fractional precision) can be scored without hand-editing.
+  return engine.run({ spec, session: normalizeSession(session), connection });
 }

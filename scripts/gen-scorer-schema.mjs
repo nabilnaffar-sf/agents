@@ -16,9 +16,10 @@
 
 /**
  * Build-time codegen: derive JSON Schemas from TypeScript types so the types (and their JSDoc) are the single
- * source of truth. The output is git-ignored and regenerated on every `compile` (wireit `gen:scorer-schema`),
- * then imported by its wrapper module:
+ * source of truth. The outputs are git-ignored and regenerated on every `compile` (wireit `gen:scorer-schema`),
+ * then imported by their wrapper modules:
  *   - `ScorerSpec`  → src/agentScorers/scorerSpecSchema.generated.ts  (imported by src/agentScorers/scorerSpecSchema.ts)
+ *   - `SessionView` → src/agentScorers/sessionViewSchema.generated.ts (imported by src/agentScorers/sessionViewSchema.ts)
  *
  * To add or change a field, edit the type in src/agentScorers/types.ts — nothing here needs to change.
  */
@@ -75,4 +76,10 @@ generate({
   type: 'ScorerSpec',
   constName: 'SCORER_SPEC_JSON_SCHEMA',
   outFile: join(root, 'src', 'agentScorers', 'scorerSpecSchema.generated.ts'),
+});
+
+generate({
+  type: 'SessionView',
+  constName: 'SESSION_VIEW_JSON_SCHEMA',
+  outFile: join(root, 'src', 'agentScorers', 'sessionViewSchema.generated.ts'),
 });

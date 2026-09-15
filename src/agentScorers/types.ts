@@ -14,14 +14,17 @@
  * limitations under the License.
  */
 
-// Shared declarations for the agent scorer authoring feature: the authoring model and its vocabulary. The logic
-// modules (validate, promptContent, xml) and the public entry (../agentScorer) import their types from here.
+// Shared declarations for the agent scorer feature: the authoring model and its vocabulary, the STDM session
+// view, and the run-time engine contract. The logic modules (validate, promptContent, xml, engines) and the
+// public entry (../agentScorer) import their types from here.
 //
 // NOTE: The JSDoc on the authoring types below (OutputEnumValue, AgentAssociation, ScorerSpec) is the single
 // source of truth for the spec JSON Schema surfaced by `sf agent scorer generate-metadata-file --spec-schema`. That schema is
 // generated from these types (scripts/gen-scorer-schema.mjs → src/scorerSpecSchema.generated.ts), so field
 // descriptions and constraints (@pattern, @minLength, @maxLength, @minimum, @maximum, @default) live here only.
 // To add or change a field, edit the type.
+
+import { type Connection } from '@salesforce/core';
 
 // Enum value sets are declared as `const` arrays so both this package and consumers (e.g. the CLI's
 // interactive prompt options/validators) can share a single source of truth; the union types are derived
@@ -212,4 +215,182 @@ export type ScorerCreateResult = {
   contents: string;
   promptTemplatePath?: string;
   promptTemplateContents?: string;
+};
+
+// --- STDM session view ----------------------------------------------------------------------------------
+//
+// Typed model of the STDM session detail view (`stdmDetailViewType`), the object passed as the
+// `Input:Session` value when running a scorer. Mirrors the server-side Java view DTOs in
+// `agentforce.session.tracing.impl.evals.dto.sessionview`: fields the Java DTOs annotate
+// `@JsonProperty(required = true)` are non-optional here; the rest are optional. `Double` maps to `number`,
+// `String` to `string`, `List<X>` to `X[]`.
+//
+// HOW TO POPULATE FROM DATA CLOUD STDM: this is the same session→turn→step data stored in the STDM Data Cloud
+// DMOs, projected into the platform's canonical detail view. Source it with `ConnectApi.CdpQuery` (ANSI SQL)
+// against, primarily: `ssot__AiAgentSession__dlm` (session), `ssot__AiAgentInteraction__dlm` where
+// `ssot__AiAgentInteractionType__c = 'TURN'` (runs), and `ssot__AiAgentSessionParticipant__dlm` (actors). The
+// per-field notes below give the STDM column for the fields with a direct mapping. NOTE: field names here are
+// camelCase and differ from the raw DMO columns — map into this shape rather than passing DMO rows verbatim.
+
+/**
+ * An ISO-8601 date-time string in UTC that MUST end with the literal '+0000' offset, e.g.
+ * '2026-09-09T12:34:56.000+0000'. The bare 'Z' zulu designator is NOT accepted, nor is a colon-separated
+ * offset ('+00:00') or any non-UTC offset — always write the UTC offset as exactly '+0000'. Every timestamp
+ * in the session view uses this format.
+ *
+ * @pattern ^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?\+0000$
+ */
+export type IsoTimestamp = string;
+
+/** Top-level session metadata — `stdmSessionStateType` (Java: SessionStateView). */
+export type SessionStateView = {
+  /** Unique ID of the session. STDM: `ssot__AiAgentSession__dlm.ssot__AiAgentSessionId__c`. */
+  sessionId: string;
+  /** ISO-8601 timestamp when the session started. STDM: session `ssot__StartTimestamp__c`. */
+  startTimestamp: IsoTimestamp;
+  /** Channel the session ran on (e.g. web, messaging, voice). STDM: `ssot__AiAgentChannelType__c`. */
+  channel: string;
+  /** ID of the underlying Messaging session when the channel is messaging; omit otherwise. */
+  messagingSessionId?: string;
+  /** ID of the underlying voice call when the channel is voice; omit otherwise. */
+  voiceCallId?: string;
+};
+
+/** One participant in `actors[]` — `stdmActorType` (Java: ActorView). Sourced from `ssot__AiAgentSessionParticipant__dlm`. */
+export type ActorView = {
+  /** Unique ID of the actor/participant. STDM: `ssot__AiAgentSessionParticipant__dlm.ssot__ParticipantId__c`. */
+  id: string;
+  /** The Salesforce object that represents this participant (e.g. the user or agent object). */
+  participantObject: string;
+  /** The actor's role in the conversation (e.g. 'user', 'agent', 'system'); referenced by `messages[].actorRole`. */
+  role: string;
+  /** For agent actors, the agent's API name. STDM: `ssot__AiAgentApiName__c`. Omit for non-agent actors. */
+  agentApiName?: string;
+  /** For agent actors, the deployed agent version. Omit for non-agent actors. */
+  agentVersion?: string;
+  /** For agent actors, the agent type. Omit for non-agent actors. */
+  agentType?: string;
+  /** For agent actors, the template the agent was created from. Omit for non-agent actors. */
+  agentTemplate?: string;
+};
+
+/** Aggregate session metrics — `stdmMetricsType` (Java: MetricsView). */
+export type MetricsView = {
+  /** Total session duration in milliseconds. */
+  durationMs: number;
+  /** Number of turns in the session; equals the length of `runs`. */
+  turns: number;
+};
+
+/** One message in `runs[].messages` — `stdmMessageType` (Java: MessageView). */
+export type MessageView = {
+  /** The message text: a user utterance or an agent response. */
+  message: string;
+  /** ISO-8601 timestamp when the message was sent. */
+  timestamp: IsoTimestamp;
+  /** Role of the actor who sent the message; matches one of `actors[].role`. */
+  actorRole: string;
+  /** ID of the actor who sent the message; matches one of `actors[].id`. */
+  actorId: string;
+  /** Message type/classification (e.g. the kind of turn message). */
+  type: string;
+};
+
+/**
+ * One step in `runs[].agentLoop.steps` — `stdmStepType` (Java: StepView).
+ *
+ * `input` and `output` are optional string fields (customTextType) that may carry JSON content as text.
+ */
+export type StepView = {
+  /** Unique ID of the step. */
+  stepId: string;
+  /** Step type (e.g. reasoning, action invocation, variable update, LLM call). */
+  type: string;
+  /** Human-readable step name (e.g. the action or tool that ran). */
+  name: string;
+  /** ISO-8601 timestamp when the step started. */
+  startTimestamp: IsoTimestamp;
+  /** ISO-8601 timestamp when the step ended. */
+  endTimestamp: IsoTimestamp;
+  /** Step duration in milliseconds. */
+  durationMs: number;
+  /** Step input payload as text (may be JSON-encoded). Optional. */
+  input?: string;
+  /** Step output payload as text (may be JSON-encoded). Optional. */
+  output?: string;
+};
+
+/** The agent's reasoning/action loop for a run — `stdmAgentLoopType` (Java: AgentLoopView). */
+export type AgentLoopView = {
+  /** The ordered reasoning/action steps executed during the run. */
+  steps: StepView[];
+};
+
+/**
+ * One turn/interaction in `runs[]` — `stdmRunType` (Java: RunView).
+ * STDM: one `ssot__AiAgentInteraction__dlm` row where `ssot__AiAgentInteractionType__c = 'TURN'`.
+ */
+export type RunView = {
+  /** Unique ID of the run/interaction. STDM: the interaction ID on `ssot__AiAgentInteraction__dlm`. */
+  runId: string;
+  /** The topic the agent selected for this run. */
+  topicName: string;
+  /** ISO-8601 timestamp when the run started. STDM: interaction `ssot__StartTimestamp__c`. */
+  startTimestamp: IsoTimestamp;
+  /** ISO-8601 timestamp when the run ended. STDM: interaction `ssot__EndTimestamp__c`. */
+  endTimestamp: IsoTimestamp;
+  /** Run duration in milliseconds. */
+  durationMs: number;
+  /** The user/agent messages exchanged during this run. */
+  messages: MessageView[];
+  /** The agent's reasoning/action loop for this run. */
+  agentLoop: AgentLoopView;
+};
+
+/**
+ * The STDM session detail view — `stdmDetailViewType` (Java: SessionView).
+ * This is the strongly-typed shape of a scorer's `Input:Session` value.
+ */
+export type SessionView = {
+  /** Top-level session metadata. */
+  sessionState: SessionStateView;
+  /** The participants in the session (users, agents, system). */
+  actors: ActorView[];
+  /** Aggregate session metrics. */
+  metrics: MetricsView;
+  /** The session's turns/interactions, each with its messages and agent loop. */
+  runs: RunView[];
+};
+
+// --- Run-time engine contract ---------------------------------------------------------------------------
+
+/** valueMap entry shape for the generations API. */
+export type ValueMap = Record<string, { value: unknown }>;
+
+/** Everything an engine receives to run one scorer against one session. */
+export type EngineRunInput = {
+  /** The typed scorer definition — the engine reads engineType and output values from it. */
+  spec: ScorerSpec;
+  /** The STDM session detail view, passed to the engine as the `Input:Session` value. */
+  session: SessionView;
+  /** Connection to the org the scorer runs against. */
+  connection: Connection;
+};
+
+/** The score an engine returns. */
+export type ScorerResult = {
+  ok: boolean;
+  /** The score: one or more labels, or a typed value matching the scorer's lightning type. */
+  output?: number | string | string[];
+  explanation?: string;
+  /** Raw engine output (for debugging / loose formats). */
+  raw?: string;
+  error?: string;
+};
+
+/** A runnable engine for one engineType. `run` executes the scorer and returns the score. */
+export type ScorerEngine = {
+  /** The engineType this engine handles (matches ScorerSpec.engineType). */
+  readonly engineType: ScorerEngineType;
+  run(input: EngineRunInput): Promise<ScorerResult>;
 };

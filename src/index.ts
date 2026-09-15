@@ -241,8 +241,28 @@ export {
   type ScorerVersionInfo,
   createScorerDefinition,
   loadScorerSpec,
+
+  // STDM session model scorer input (the `Input:Session` value shape)
+  type SessionView,
+  type SessionStateView,
+  type ActorView,
+  type MetricsView,
+  type MessageView,
+  type StepView,
+  type AgentLoopView,
+  type RunView,
+
+  // Running a scorer
+  runScorer,
+  type ScorerEngine,
+  type EngineRunInput,
+  type ScorerResult,
+  registerEngine,
+  getEngine,
+  supportedEngineTypes,
 } from './agentScorer';
 export { SCORER_SPEC_JSON_SCHEMA, scorerSpecJsonSchema } from './agentScorers/scorerSpecSchema';
+export { SESSION_VIEW_JSON_SCHEMA, sessionViewJsonSchema } from './agentScorers/sessionViewSchema';
 export { ApiCatalog } from './apiCatalog';
 export {
   type McpServerType,
